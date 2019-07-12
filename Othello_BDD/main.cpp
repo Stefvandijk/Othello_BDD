@@ -21,8 +21,8 @@ using namespace sylvan;
 
 
 
-#define L 4 //number of rows
-#define Wi 5 //number of columns
+#define L 8 //number of rows
+#define Wi 8 //number of columns
 #define  DL   (L*Wi)                     // index to deadlock relation
 
 
@@ -36,6 +36,7 @@ static BDDSET       VA[L*Wi+1],          // var set for partial input states
                     VR0;                // full var set of total relation
 static vector<int>  varsArray;
 bool odd = L%2 || Wi%2;
+bool turnvars_bottom = false;
 
 enum {
     W = 0, // White
@@ -286,12 +287,11 @@ void calcVarOrder(){
             varsArray.push_back(Wi*i+ring);
         }
         for(int i=ring+1;i<L-ring-1;i++){//east side
-            varsArray.push_back(Wi*i+L-ring-1);
+            varsArray.push_back(Wi*i+Wi-ring-1);
         }
     }*/
     //BDD upside down squares order
-    /*
-    for(int ring=0;ring<rings;ring++){
+    /*for(int ring=0;ring<rings;ring++){
         varsArray.insert(varsArray.begin(), Wi*ring+ring);//linksboven
         varsArray.insert(varsArray.begin(), Wi*ring+Wi-ring-1);//rechtsboven
         varsArray.insert(varsArray.begin(), Wi*(L-1-ring)+ring);//linksonder
@@ -306,7 +306,7 @@ void calcVarOrder(){
             varsArray.insert(varsArray.begin(), Wi*i+ring);
         }
         for(int i=ring+1;i<L-ring-1;i++){//east side
-            varsArray.insert(varsArray.begin(), Wi*i+L-ring-1);
+            varsArray.insert(varsArray.begin(), Wi*i+Wi-ring-1);
         }
     }*/
 }
@@ -349,9 +349,10 @@ init_othello()
         sylvan_protect (P[0]);
         P[1][b] = sylvan_ithvar(b);
         sylvan_protect (P[1]);
-    }
+    }/*
     //turn vars bottom of BDD
-    /*for(int i=0;i<L*Wi;i++){
+    turnvars_bottom = true;
+    for(int i=0;i<L*Wi;i++){
         VA[i] = sylvan_set_empty();
         sylvan_protect (&VA[i]);
         VB[i] = sylvan_set_empty();
@@ -941,6 +942,7 @@ init_othello_transition_relation (int i, int j)
             }
         }        
     }
+    //rel = sylvan_or(rel, F[i][j][N][0]);//mostly turn off, only on when computing number of winning states: together with F[N] on and nithvar-nithvar as F[E].
     cout << "number of nodes " << sylvan_nodecount(rel) << ", sat count: "<< sylvan_satcount(rel,VR0) << endl;
     bdd_refs_popptr(7);
     return rel;
@@ -970,15 +972,21 @@ void rel_and_winning_positions(BDD *rel){
     }
     //bdd_refs_popptr(5);
     //return sylvan_false;
+    rel[DL+3] = fullrel; //fullrel without zeromoves(deadlocks)
 
     rel[DL] = s_and(rel[DL], s_or(sylvan_and(P[0][0], P[1][1]), sylvan_and(P[1][0], P[0][1])));
     cout << "deadlocks berekenen..." << endl;
     for(int i=0;i<L*Wi;i++){
-        deadlocks = s_and(deadlocks, sylvan_forall_preimage(sylvan_false, rel[i]));
+        deadlocks = s_and(deadlocks, sylvan_forall_preimage(sylvan_false, rel[varsArray[i]]));
     }
     cout << "number of nodes in deadlocks " << sylvan_nodecount(deadlocks) << ", sat count: "<< sylvan_satcount(deadlocks,VA0) << endl;
 
-    BDD end = sylvan_and(sylvan_low(deadlocks), sylvan_high(deadlocks)); //only works if turn vars on top
+    //BDD end = sylvan_and(sylvan_low(deadlocks), sylvan_high(deadlocks)); //only works if turn vars on top
+    BDD tmp = sylvan_ithvar(turnvars_bottom*(L*Wi*4+4));
+    bdd_refs_pushptr(&tmp);
+    BDD end = sylvan_forall(deadlocks, tmp);
+    bdd_refs_popptr(1);
+
     bdd_refs_pushptr(&end);
     cout << "number of nodes in end " << sylvan_nodecount(end) << ", sat count: "<< sylvan_satcount(end, VA0) << endl;
 
@@ -997,20 +1005,21 @@ void rel_and_winning_positions(BDD *rel){
     winning = end; //both players can't move, so exactly the set of finished boards
     winning = s_and(winning, moreWhiteStones());
     rel[DL+2] = winning;
+    varsArray[DL] = DL;
     cout << "number of nodes in winning " << sylvan_nodecount(winning) << ", sat count: "<< sylvan_satcount(winning,VA0) << endl;
     bdd_refs_popptr(4);
 }
 
-BDD reachable(BDD start, BDD *rel){
+BDD reachable_states(BDD start, BDD *rel){
     LACE_ME;
-    BDD move = sylvan_false;
-    bdd_refs_pushptr(&move);
     start = s_or(start, sylvan_relnext(start, rel[DL], VR[DL])); //base case, will never happen with normal start boards
+    BDD move = start;
+    bdd_refs_pushptr(&move);
     //calculate reachable boards with i stones or less
     for(int i=5;i<=L*Wi;i++){
         cout << "reachability iteration: " << i << endl;
         for (int j=L*Wi-1; j>=0; j--) {
-            move = s_or(move, sylvan_relnext(start, rel[j], VR[j]));//add all boards to move with one more stone
+            move = s_or(move, sylvan_relnext(start, rel[varsArray[j]], VR0));//add all boards to move with one more stone
         }
         move = s_or(move, sylvan_relnext(move, rel[DL], VR[DL])); //add all boards also with i stones by using DL relation
         start = move; // set of reachable boards with i stones or less
@@ -1143,15 +1152,15 @@ int main(int argc, const char *argv[]) {
     cout << "number of nodes in start board " << sylvan_nodecount(start) << endl;
     //CALL(sylvan_enum, start, VA0, printboard, NULL);
 
-    /*uint32_t array[sylvan_set_count(VR[0])];
-    sylvan_set_toarray(VR[0], array);
-    for(size_t i=0;i<sylvan_set_count(VR[0]);i++){
+    /*uint32_t array[sylvan_set_count(VR[2])];
+    sylvan_set_toarray(VR[2], array);
+    for(size_t i=0;i<sylvan_set_count(VR[2]);i++){
         cout << array[i] << endl;
-    }*/  
+    } */
 
     //calculate the relation
-    static BDD rel[L*Wi + 3] = {sylvan_false};
-    for(int i = 0; i<L*Wi+3; i++) {
+    static BDD rel[L*Wi + 4] = {sylvan_false};
+    for(int i = 0; i<L*Wi+4; i++) {
         rel[i] = sylvan_false;
         sylvan_protect(&rel[i]);
     }
@@ -1159,6 +1168,8 @@ int main(int argc, const char *argv[]) {
     sylvan_protect(&winning);
     BDD fullrel = sylvan_false;
     sylvan_protect(&fullrel);
+    BDD fullrel_no_zeromoves = sylvan_false;
+    sylvan_protect(&fullrel_no_zeromoves);
 
     if (1) {
         printf ("Creating Othello transition relation.\n");
@@ -1180,6 +1191,7 @@ int main(int argc, const char *argv[]) {
     }
     fullrel = rel[DL+1];
     winning = rel[DL+2];
+    fullrel_no_zeromoves = rel[DL+3];
 
     //CALL(sylvan_enum, winning, VA0, printboard, NULL);
 
@@ -1195,6 +1207,8 @@ int main(int argc, const char *argv[]) {
     sylvan_protect(&tmp3);
     BDD copymove = sylvan_false;
     sylvan_protect(&copymove);
+    BDD reachable = sylvan_false;
+    sylvan_protect(&reachable);
     int loops = 0;
     auto startTime = chrono::system_clock::now();
     auto endTime = chrono::system_clock::now();
@@ -1218,7 +1232,7 @@ int main(int argc, const char *argv[]) {
 
 //            move = s_or(move, sylvan_relnext(start, fullrel, VR0));
             for (int i=L*Wi; i>=0; i--) {
-                move = s_or(move, sylvan_relnext(start, rel[i], VR[i]));
+                move = s_or(move, sylvan_relnext(start, rel[varsArray[i]], VR0));
             }
             start = move;
             cout << "Level ["<< setw(2) << loops+1 << "] number of boards: "<< setw(13) << (size_t)sylvan_satcount(move,VA0)
@@ -1271,11 +1285,11 @@ int main(int argc, const char *argv[]) {
         outfile.close();
     }
 
-    //TODO intersect with reachable in every iteration!
     if(alg==8){//backward limited to reachables states (first calculate reachable states, then do backward) 
         cout << "Now running backward + reachable" << endl;
         outfile.open("sizesbackward_reachable.txt", ofstream::app);
-        winning = s_and(winning, reachable(start, rel));
+        reachable = reachable_states(start, rel);
+        winning = s_and(winning, reachable);
 
         int loops = 0;
         move = winning;
@@ -1299,6 +1313,7 @@ int main(int argc, const char *argv[]) {
             //move = s_or(move, sylvan_forall_preimage(winning, fullrel));
             //tmp = sylvan_forall_preimage(sylvan_false, fullrel);
             //move = sylvan_diff
+            move = s_and(move, reachable);
             winning = move;
             cout << "Level ["<< setw(2) << loops+1 << "] number of boards: "<< setw(13) << (size_t)sylvan_satcount(move,VA0)
             <<" [nodes: "<< setw(13) << sylvan_nodecount(move) << "]"<< endl;
@@ -1327,7 +1342,7 @@ int main(int argc, const char *argv[]) {
         for(int i=5;i<=L*Wi;i++){//number of stones
             move = sylvan_false;
             for (int j=L*Wi-1; j>=0; j--) {
-                move = s_or(move, sylvan_relnext(start, rel[j], VR[j]));//add all boards with i stones
+                move = s_or(move, sylvan_relnext(start, rel[varsArray[j]], VR0));//add all boards with i stones
             }
             move = s_or(move, sylvan_relnext(move, rel[DL], VR[DL])); //add all boards also with i stones by using DL relation
             start = move;
@@ -1351,15 +1366,14 @@ int main(int argc, const char *argv[]) {
             tmp = sylvan_and(move, P[1][0]); //want to find all moves for white, so in winning it must be blacks turn unprimed.
             line2 = sylvan_false;
             for (int j=L*Wi-1; j>=0; j--) {
-                line2 = s_or(line2, sylvan_relprev(rel[j], tmp, VR0));//add all white moves to i stones
+                line2 = s_or(line2, sylvan_relprev(rel[varsArray[j]], tmp, VR0));//add all white moves to i stones
             }
             //add all black moves going to move(line1)
             tmp = sylvan_and(move, P[0][0]); //want to find all moves for black, so in winning it must be whites turn unprimed.
-            tmp2 = sylvan_relprev(fullrel, tmp, VR0);
+            tmp2 = sylvan_relprev(fullrel_no_zeromoves, tmp, VR0);
             tmp3 = sylvan_not(tmp);
-            tmp3 = sylvan_relprev(fullrel, tmp3, VR0);
+            tmp3 = sylvan_relprev(fullrel_no_zeromoves, tmp3, VR0);
             line2 = s_or(line2, sylvan_diff(tmp2, tmp3));
-
             //add all boards with also i stones by DL relation
             line2 = s_or(line2, sylvan_relprev(rel[DL], line2, VR[DL])); 
             move = s_or(line2, sylvan_and(winning, boardWithXStones(i)));
@@ -1382,31 +1396,32 @@ int main(int argc, const char *argv[]) {
     else if(alg==11){//backward limited to reachable states + sweepline
         cout << "Now running backward + sweepline + reachable" << endl;
         outfile.open("sizesbackward_reachable_sweepline.txt", ofstream::app);
-        winning = s_and(winning, reachable(start, rel));
-        move = sylvan_and(winning, boardWithXStones(L*Wi)); //Line1
+        reachable = reachable_states(start, rel);
+        move = sylvan_and(winning, reachable);
+        move = s_and(move, boardWithXStones(L*Wi)); //Line1
         cout << "Level ["<< setw(2) << 0 << "] number of boards: "<< setw(13) << (size_t)sylvan_satcount(move,VA0)
             <<" [nodes: "<< setw(13) << sylvan_nodecount(move) << "]"<< endl;
         outfile << 0 << "\t" << setw(13) << sylvan_nodecount(move) << endl;
-        move = sylvan_and(winning, boardWithXStones(L*Wi));
         for(int i=L*Wi-1;i>=4;i--){//number of stones
             //add al white moves going to winning
             tmp = sylvan_and(move, P[1][0]); //want to find all moves for white, so in winning it must be blacks turn unprimed.
             line2 = sylvan_false;
             for (int j=L*Wi-1; j>=0; j--) {
-                line2 = s_or(line2, sylvan_relprev(rel[j], tmp, VR0));//add all white moves to i-1 stones
+                line2 = s_or(line2, sylvan_relprev(rel[varsArray[j]], tmp, VR0));//add all white moves to i-1 stones
             }
 
             //add all black moves going to winning
             tmp = sylvan_and(move, P[0][0]); //want to find all moves for black, so in winning it must be whites turn unprimed.
-            tmp2 = sylvan_relprev(fullrel, tmp, VR0);
+            tmp2 = sylvan_relprev(fullrel_no_zeromoves, tmp, VR0);
             tmp3 = sylvan_not(tmp);
-            tmp3 = sylvan_relprev(fullrel, tmp3, VR0);
+            tmp3 = sylvan_relprev(fullrel_no_zeromoves, tmp3, VR0);
             line2 = s_or(line2, sylvan_diff(tmp2, tmp3));
 
             //add all boards with also i-1 stones by DL relation
             line2 = s_or(line2, sylvan_relprev(rel[DL], line2, VR[DL])); 
 
             move = s_or(line2, sylvan_and(winning, boardWithXStones(i)));
+            move = s_and(move, reachable);
             cout << "Level ["<< setw(2) << L*Wi-i << "] number of boards: "<< setw(13) << (size_t)sylvan_satcount(move,VA0)
                 <<" [nodes: "<< setw(13) << sylvan_nodecount(move) << "]"<< endl;
             outfile << L*Wi-i << "\t" << setw(13) << sylvan_nodecount(move) << endl;
